@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Myrza Object Chat</title>
+    <link rel="stylesheet" href="/static/chat.css" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <aside class="control-panel">
+        <div class="panel-header">
+          <p class="eyebrow">Test Console</p>
+          <h1>Myrza Object Chat</h1>
+          <p class="panel-copy">
+            Локальный чат для ручного теста вопросов по магазину и конкретным зонам.
+          </p>
+        </div>
+
+        <section class="card status-card">
+          <div class="status-row">
+            <span id="status-indicator" class="status-pill muted">checking</span>
+            <span id="status-copy" class="status-copy">Проверяю backend...</span>
+          </div>
+          <p id="status-details" class="status-details">Загрузка статуса зависимостей.</p>
+        </section>
+
+        <section class="card form-card">
+          <div class="section-heading">
+            <h2>Контекст запроса</h2>
+            <button id="reload-objects" class="ghost-button" type="button">Обновить зоны</button>
+          </div>
+
+          <label class="field">
+            <span>Store ID</span>
+            <input id="store-id" type="number" min="1" value="5" />
+          </label>
+
+          <label class="field">
+            <span>Объект</span>
+            <select id="object-id">
+              <option value="">Весь магазин</option>
+            </select>
+          </label>
+
+          <label class="field">
+            <span>Timezone</span>
+            <div class="inline-field">
+              <input id="timezone" type="text" value="UTC" />
+              <button id="detect-timezone" class="ghost-button" type="button">Моя TZ</button>
+            </div>
+          </label>
+
+          <div class="field-grid">
+            <label class="field">
+              <span>Start Time</span>
+              <input id="start-time" type="datetime-local" />
+            </label>
+            <label class="field">
+              <span>End Time</span>
+              <input id="end-time" type="datetime-local" />
+            </label>
+          </div>
+
+          <p class="field-note">
+            Если задаёшь ручной интервал, эти поля отправляются в локальной timezone браузера.
+            Поле <code>Timezone</code> в основном влияет на относительные периоды вроде
+            «последний месяц».
+          </p>
+
+          <label class="field">
+            <span>Model override</span>
+            <input id="model" type="text" placeholder="оставь пустым для default" />
+          </label>
+
+          <label class="checkbox-row">
+            <input id="use-history" type="checkbox" checked />
+            <span>Использовать историю через <code>previous_response_id</code></span>
+          </label>
+
+          <div class="meta-strip">
+            <span class="meta-label">Last response</span>
+            <code id="last-response-id">none</code>
+          </div>
+
+          <div class="quick-prompts">
+            <button class="prompt-chip" type="button" data-prompt="Что происходит по магазину прямо сейчас, если интервал уже задан?">
+              Сводка по интервалу
+            </button>
+            <button class="prompt-chip" type="button" data-prompt="Сравни выбранный объект с остальными за интервал.">
+              Сравнить объект
+            </button>
+            <button class="prompt-chip" type="button" data-prompt="В какой день за последний месяц было больше всего клиентов?">
+              Лучший день за месяц
+            </button>
+            <button class="prompt-chip" type="button" data-prompt="Какая зона была самой активной за последние 7 дней?">
+              Самая активная зона
+            </button>
+          </div>
+
+          <div class="panel-actions">
+            <button id="clear-chat" class="secondary-button" type="button">Очистить чат</button>
+          </div>
+        </section>
+      </aside>
+
+      <main class="chat-panel">
+        <header class="chat-header">
+          <div>
+            <p class="eyebrow">Live Test</p>
+            <h2>Диалог с аналитическим агентом</h2>
+          </div>
+          <div class="chat-header-note">
+            Вопросы по магазину, объектам, дням, интервалам и follow-up репликам.
+          </div>
+        </header>
+
+        <section id="messages" class="messages" aria-live="polite"></section>
+
+        <form id="composer" class="composer">
+          <label class="composer-field" for="question">
+            <span class="sr-only">Сообщение</span>
+            <textarea
+              id="question"
+              rows="4"
+              placeholder="Например: в какой день за последний месяц было больше всего клиентов?"
+            ></textarea>
+          </label>
+          <div class="composer-actions">
+            <p class="composer-hint">Enter для новой строки, <kbd>Cmd</kbd>/<kbd>Ctrl</kbd> + <kbd>Enter</kbd> для отправки.</p>
+            <button id="send-button" class="primary-button" type="submit">Отправить</button>
+          </div>
+        </form>
+      </main>
+    </div>
+
+    <template id="message-template">
+      <article class="message-card">
+        <div class="message-head">
+          <span class="message-role"></span>
+          <span class="message-time"></span>
+        </div>
+        <div class="message-body"></div>
+        <div class="message-meta"></div>
+      </article>
+    </template>
+
+    <script src="/static/chat.js" defer></script>
+  </body>
+</html>
