@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from app.analytics_toolkit import AnalyticsToolkit
 from app.config import Settings
 from app.schemas import ObjectChatRequest, TrackerCounts, TrackerObject
-from app.service import ObjectChatService
+from app.service import OFF_TOPIC_ANSWER, ObjectChatService
 
 DAILY_COUNTS = {
     "2026-03-01": {
@@ -145,18 +145,42 @@ class RetryingOpenAIClient:
         self.responses = RetryingResponsesAPI()
 
 
+class DirectResponsesAPI:
+    def __init__(self, output_text: str) -> None:
+        self.calls: list[dict] = []
+        self.output_text = output_text
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        return SimpleNamespace(
+            id="resp_direct_1",
+            model=kwargs["model"],
+            output_text=self.output_text,
+            output=[],
+        )
+
+
+class DirectOpenAIClient:
+    def __init__(self, output_text: str) -> None:
+        self.responses = DirectResponsesAPI(output_text)
+
+
+def make_settings() -> Settings:
+    return Settings(
+        openai_api_key="test-key",
+        openai_model="gpt-5-mini",
+        openai_max_output_tokens=300,
+        openai_reasoning_effort="low",
+        openai_max_tool_rounds=4,
+        request_timeout_seconds=10,
+        tracker_api_base_url="http://unused",
+    )
+
+
 def make_service() -> tuple[ObjectChatService, FakeOpenAIClient]:
     openai_client = FakeOpenAIClient()
     service = ObjectChatService(
-        settings=Settings(
-            openai_api_key="test-key",
-            openai_model="gpt-5-mini",
-            openai_max_output_tokens=300,
-            openai_reasoning_effort="low",
-            openai_max_tool_rounds=4,
-            request_timeout_seconds=10,
-            tracker_api_base_url="http://unused",
-        ),
+        settings=make_settings(),
         tracker_client=FakeTrackerClient(),
         openai_client=openai_client,
     )
@@ -166,15 +190,7 @@ def make_service() -> tuple[ObjectChatService, FakeOpenAIClient]:
 def make_retrying_service() -> tuple[ObjectChatService, RetryingOpenAIClient]:
     openai_client = RetryingOpenAIClient()
     service = ObjectChatService(
-        settings=Settings(
-            openai_api_key="test-key",
-            openai_model="gpt-5-mini",
-            openai_max_output_tokens=300,
-            openai_reasoning_effort="low",
-            openai_max_tool_rounds=4,
-            request_timeout_seconds=10,
-            tracker_api_base_url="http://unused",
-        ),
+        settings=make_settings(),
         tracker_client=FakeTrackerClient(),
         openai_client=openai_client,
     )
@@ -265,3 +281,53 @@ def test_service_auto_retries_without_object_id_for_store_scope():
     tool_output = json.loads(second_call["input"][0]["output"])
     assert tool_output["scope"] == "store"
     assert tool_output["best_days"]["by_inside"]["date"] == "2026-03-02"
+
+
+def test_offtopic_question_returns_guardrail_without_openai_call():
+    service, openai_client = make_service()
+    request = ObjectChatRequest(
+        store_id=5,
+        question="Дай рецепт пельменей",
+        timezone="UTC",
+    )
+
+    response = service.answer_question(request)
+
+    assert response.answer == OFF_TOPIC_ANSWER
+    assert response.model == "guardrail"
+    assert response.response_id is None
+    assert response.context.tools_used == []
+    assert openai_client.responses.calls == []
+
+
+def test_output_is_normalized_for_readability():
+    openai_client = DirectOpenAIClient("Пик был 14 марта.  \n\n\nМетрика proxy: points_* считаем как proxy.   ")
+    service = ObjectChatService(
+        settings=make_settings(),
+        tracker_client=FakeTrackerClient(),
+        openai_client=openai_client,
+    )
+    request = ObjectChatRequest(
+        store_id=5,
+        question="Какой день был самым активным?",
+        timezone="UTC",
+    )
+
+    response = service.answer_question(request)
+
+    assert response.answer == "Пик был 14 марта.\n\nМетрика proxy: points_* считаем как proxy."
+    assert len(openai_client.responses.calls) == 1
+
+
+def test_instructions_require_short_answers_and_offtopic_refusal():
+    request = ObjectChatRequest(
+        store_id=5,
+        question="Что происходит по магазину?",
+        timezone="UTC",
+    )
+
+    instructions = ObjectChatService._build_instructions(request)
+
+    assert "Start with one direct sentence" in instructions
+    assert OFF_TOPIC_ANSWER in instructions
+    assert "Keep the answer compact and easy to scan" in instructions

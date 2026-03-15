@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -10,6 +11,163 @@ from app.analytics_toolkit import AnalyticsToolkit
 from app.config import Settings
 from app.schemas import ObjectChatRequest, ObjectChatResponse
 from app.tracker_client import TrackerClient
+
+OFF_TOPIC_ANSWER = (
+    "Я отвечаю только по магазину, зонам, объектам и их метрикам. "
+    "Спроси про период, объект, зону, трафик, очередь или сравнение."
+)
+
+STRONG_DOMAIN_KEYWORDS = (
+    "объект",
+    "зона",
+    "касс",
+    "очеред",
+    "трафик",
+    "посет",
+    "клиент",
+    "примероч",
+    "полк",
+    "вешал",
+    "rack",
+    "checkout",
+    "queue",
+    "traffic",
+    "inside",
+    "around",
+    "зал",
+    "вход",
+    "выход",
+    "камера",
+    "сесс",
+    "демограф",
+    "возраст",
+    "мужч",
+    "женщ",
+    "конверси",
+    "выручк",
+    "чек",
+    "продаж",
+    "примерк",
+    "heatmap",
+    "уведомлен",
+    "alert",
+)
+WEAK_DOMAIN_KEYWORDS = ("магазин", "store", "shop")
+ANALYTICS_KEYWORDS = (
+    "сравни",
+    "динамик",
+    "пик",
+    "актив",
+    "лидер",
+    "топ",
+    "рост",
+    "падени",
+    "средн",
+    "максим",
+    "миним",
+    "сколько",
+    "когда",
+    "день",
+    "дня",
+    "дней",
+    "недел",
+    "месяц",
+    "месяца",
+    "час",
+    "часа",
+    "часов",
+    "сегодня",
+    "вчера",
+    "интервал",
+    "период",
+    "по дням",
+    "по часам",
+    "за последний",
+)
+OFF_TOPIC_KEYWORDS = (
+    "рецепт",
+    "пельмен",
+    "борщ",
+    "суп",
+    "котлет",
+    "паста",
+    "пирог",
+    "кулинар",
+    "еда",
+    "погода",
+    "доллар",
+    "евро",
+    "курс валют",
+    "анекдот",
+    "шутк",
+    "стих",
+    "песня",
+    "поздрав",
+    "переведи",
+    "перевод",
+    "реферат",
+    "сочинени",
+    "домашк",
+    "python",
+    "javascript",
+    "java",
+    "typescript",
+    "sql",
+    "regex",
+    "регекс",
+    "алгоритм",
+    "leetcode",
+    "фильм",
+    "сериал",
+    "книга",
+    "гороскоп",
+    "новост",
+    "полит",
+    "президент",
+    "любов",
+    "отношени",
+    "как дела",
+    "кто такой",
+    "что такое",
+)
+SELECTED_OBJECT_REFERENCE_PHRASES = (
+    "этот объект",
+    "эта зона",
+    "эта касса",
+    "по этому объекту",
+    "по этой зоне",
+    "по нему",
+    "по ней",
+    "у него",
+    "у нее",
+    "здесь",
+    "тут",
+)
+FOLLOW_UP_HINTS = (
+    "подробнее",
+    "короче",
+    "сравни",
+    "почему",
+    "а если",
+    "а по",
+    "топ",
+    "по дням",
+    "по часам",
+    "по зоне",
+    "по объекту",
+    "по кассе",
+    "по нему",
+    "по ней",
+)
+STORE_WIDE_HINTS = (
+    "что по",
+    "что происходит",
+    "что сейчас",
+    "сводк",
+    "итог",
+    "обстановк",
+)
+OBJECT_NAME_STOPWORDS = {"object", "left", "right", "center", "setup"}
 
 
 class ConfigurationError(RuntimeError):
@@ -35,13 +193,23 @@ class ObjectChatService:
         self.openai_client = openai_client
 
     def answer_question(self, payload: ObjectChatRequest) -> ObjectChatResponse:
+        selected_model = payload.model or self.settings.openai_model
+        toolkit = AnalyticsToolkit(request=payload, tracker_client=self.tracker_client)
+
+        guardrail_answer = self._guardrail_answer(payload)
+        if guardrail_answer is not None:
+            return ObjectChatResponse(
+                answer=guardrail_answer,
+                model="guardrail",
+                response_id=None,
+                context=toolkit.build_context(),
+            )
+
         if not self.settings.openai_api_key:
             raise ConfigurationError("OPENAI_API_KEY is not set")
         if self.openai_client is None:
             self.openai_client = OpenAI(api_key=self.settings.openai_api_key)
 
-        selected_model = payload.model or self.settings.openai_model
-        toolkit = AnalyticsToolkit(request=payload, tracker_client=self.tracker_client)
         response = self._create_response(
             model=selected_model,
             instructions=self._build_instructions(payload),
@@ -91,7 +259,7 @@ class ObjectChatService:
         resolved_model = self._read_field(response, "model") or selected_model
         response_id = self._read_field(response, "id")
         return ObjectChatResponse(
-            answer=answer,
+            answer=self._normalize_answer(answer),
             model=resolved_model,
             response_id=response_id,
             context=toolkit.build_context(),
@@ -159,7 +327,6 @@ class ObjectChatService:
             else "There is no default interval in the current request."
         )
         return (
-            "Formatting re-enabled.\n"
             "You are an analytics agent for Myrza Tracker.\n"
             "Your job is to decide which backend tools are needed, call them, and then answer.\n"
             "Never invent analytics when a tool can verify them.\n"
@@ -175,6 +342,8 @@ class ObjectChatService:
             "find the correct id.\n"
             "If a tool returns `error.retry_hint`, follow that hint and retry the tool automatically "
             "instead of asking the user, unless the missing information truly cannot be inferred.\n"
+            "If the question is outside store analytics, retail operations, objects, zones, queues, "
+            f"or metrics, do not call tools and answer exactly: {OFF_TOPIC_ANSWER}\n"
             f"{selected_object_line}\n"
             f"{default_window_line}\n"
             f"Default timezone: {payload.timezone}. Current UTC time: {now_utc}.\n"
@@ -189,8 +358,87 @@ class ObjectChatService:
             "the default proxy when it is available from the tools.\n"
             "If the necessary period is missing and cannot be inferred from the current request, say "
             "what is missing instead of guessing.\n"
-            "Always answer in Russian, concise and factual."
+            "Final answer rules:\n"
+            "- Always answer in Russian.\n"
+            "- Start with one direct sentence that answers the question.\n"
+            "- If details are useful, add at most 3 short bullet points.\n"
+            "- Do not restate the question. Do not dump raw data. Do not explain your internal reasoning.\n"
+            "- If one date, zone, rank, or number already answers the question, stop after 1-2 short sentences.\n"
+            "- If a metric caveat is needed, keep it to one short final sentence starting with 'Метрика proxy:'.\n"
+            "- Keep the answer compact and easy to scan."
         )
+
+    def _guardrail_answer(self, payload: ObjectChatRequest) -> str | None:
+        if self._is_question_in_scope(payload):
+            return None
+        return OFF_TOPIC_ANSWER
+
+    def _is_question_in_scope(self, payload: ObjectChatRequest) -> bool:
+        question = self._normalize_text(payload.question)
+        if not question:
+            return False
+
+        strong_hits = self._keyword_hits(question, STRONG_DOMAIN_KEYWORDS)
+        weak_hits = self._keyword_hits(question, WEAK_DOMAIN_KEYWORDS)
+        analytics_hits = self._keyword_hits(question, ANALYTICS_KEYWORDS)
+        off_topic_hits = self._keyword_hits(question, OFF_TOPIC_KEYWORDS)
+
+        if payload.object_id is not None and any(
+            phrase in question for phrase in SELECTED_OBJECT_REFERENCE_PHRASES
+        ):
+            strong_hits += 1
+
+        if payload.previous_response_id and off_topic_hits == 0 and (
+            analytics_hits > 0 or any(hint in question for hint in FOLLOW_UP_HINTS)
+        ):
+            return True
+
+        if off_topic_hits > 0 and strong_hits == 0:
+            return False
+
+        if strong_hits == 0:
+            strong_hits += self._object_name_signal(payload.store_id, question)
+
+        if strong_hits > 0:
+            return strong_hits + analytics_hits > off_topic_hits
+
+        if analytics_hits >= 2 and off_topic_hits == 0:
+            return True
+
+        return (
+            weak_hits > 0
+            and off_topic_hits == 0
+            and (
+                analytics_hits > 0
+                or any(hint in question for hint in STORE_WIDE_HINTS)
+            )
+        )
+
+    def _object_name_signal(self, store_id: int, normalized_question: str) -> int:
+        try:
+            objects = self.tracker_client.list_objects(store_id)
+        except Exception:
+            return 0
+
+        signal = 0
+        for obj in objects:
+            normalized_name = self._normalize_text(obj.name)
+            if normalized_name and normalized_name in normalized_question:
+                return 2
+            for token in re.findall(r"[a-zа-я0-9]+", normalized_name):
+                if len(token) < 4 or token in OBJECT_NAME_STOPWORDS:
+                    continue
+                if token in normalized_question:
+                    signal = 1
+        return signal
+
+    @staticmethod
+    def _normalize_text(value: str) -> str:
+        return re.sub(r"\s+", " ", value.lower().replace("ё", "е")).strip()
+
+    @staticmethod
+    def _keyword_hits(text: str, keywords: tuple[str, ...]) -> int:
+        return sum(1 for keyword in keywords if keyword in text)
 
     @staticmethod
     def _extract_function_calls(response: Any) -> list[dict[str, str]]:
@@ -224,6 +472,30 @@ class ObjectChatService:
                     if isinstance(text, str) and text:
                         chunks.append(text)
         return "\n".join(chunks).strip()
+
+    @staticmethod
+    def _normalize_answer(answer: str) -> str:
+        normalized_lines: list[str] = []
+        previous_blank = False
+
+        for raw_line in answer.replace("\r\n", "\n").split("\n"):
+            stripped = raw_line.strip()
+            if not stripped:
+                if previous_blank:
+                    continue
+                normalized_lines.append("")
+                previous_blank = True
+                continue
+
+            normalized_lines.append(re.sub(r"\s{2,}", " ", stripped))
+            previous_blank = False
+
+        while normalized_lines and normalized_lines[0] == "":
+            normalized_lines.pop(0)
+        while normalized_lines and normalized_lines[-1] == "":
+            normalized_lines.pop()
+
+        return "\n".join(normalized_lines)
 
     @staticmethod
     def _iter_output_items(response: Any) -> list[Any]:
