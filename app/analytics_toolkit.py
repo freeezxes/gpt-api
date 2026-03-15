@@ -6,7 +6,9 @@ from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from app.question_scope import question_mentions_entry_traffic
 from app.schemas import ObjectChatContext, ObjectChatRequest, TrackerCounts, TrackerObject
+from app.store_analytics_client import StoreAnalyticsClient
 from app.tracker_client import TrackerClient
 
 MAX_DAILY_RANGE_DAYS = 120
@@ -17,9 +19,15 @@ class ToolExecutionError(RuntimeError):
 
 
 class AnalyticsToolkit:
-    def __init__(self, request: ObjectChatRequest, tracker_client: TrackerClient) -> None:
+    def __init__(
+        self,
+        request: ObjectChatRequest,
+        tracker_client: TrackerClient,
+        store_analytics_client: StoreAnalyticsClient | None = None,
+    ) -> None:
         self.request = request
         self.tracker_client = tracker_client
+        self.store_analytics_client = store_analytics_client
         self.tools_used: list[str] = []
         self.resolved_object_id: int | None = request.object_id
         self.object_scope_used = False
@@ -149,6 +157,78 @@ class AnalyticsToolkit:
                     "additionalProperties": False,
                 },
             },
+            {
+                "type": "function",
+                "name": "get_entry_interval_traffic",
+                "description": (
+                    "Get store entry/exit traffic for a single interval from door-counter events. "
+                    "Use this for questions specifically about входы, выходы, вошло, вышло, "
+                    "entry traffic, exit traffic, or door traffic for one period."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "store_id": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "description": "Store id. Omit to use the current request store_id.",
+                        },
+                        "start_time": {
+                            "type": "string",
+                            "description": (
+                                "ISO 8601 datetime with timezone. Omit only if the current request "
+                                "already includes a default interval."
+                            ),
+                        },
+                        "end_time": {
+                            "type": "string",
+                            "description": (
+                                "ISO 8601 datetime with timezone. Omit only if the current request "
+                                "already includes a default interval."
+                            ),
+                        },
+                    },
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "type": "function",
+                "name": "get_daily_entry_traffic",
+                "description": (
+                    "Get daily store entry/exit traffic from door-counter events. "
+                    "Use this for questions like 'сравни вчера и позавчера по входам', "
+                    "'в какой день было больше всего входов', or daily entry/exit trends."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "store_id": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "description": "Store id. Omit to use the current request store_id.",
+                        },
+                        "start_date": {
+                            "type": "string",
+                            "description": (
+                                "Inclusive local start date in YYYY-MM-DD. Omit only if the current "
+                                "request interval should be reused as the date window."
+                            ),
+                        },
+                        "end_date": {
+                            "type": "string",
+                            "description": (
+                                "Inclusive local end date in YYYY-MM-DD. Omit only if the current "
+                                "request interval should be reused as the date window."
+                            ),
+                        },
+                        "timezone": {
+                            "type": "string",
+                            "description": "IANA timezone name. Omit to use the current request timezone.",
+                        },
+                    },
+                    "additionalProperties": False,
+                },
+            },
         ]
 
     def execute(self, name: str, arguments: str | dict[str, Any] | None) -> dict[str, Any]:
@@ -158,6 +238,8 @@ class AnalyticsToolkit:
                 "list_store_objects": self._list_store_objects,
                 "get_interval_counts": self._get_interval_counts,
                 "get_daily_counts": self._get_daily_counts,
+                "get_entry_interval_traffic": self._get_entry_interval_traffic,
+                "get_daily_entry_traffic": self._get_daily_entry_traffic,
             }
             handler = handlers.get(name)
             if handler is None:
@@ -197,6 +279,53 @@ class AnalyticsToolkit:
             tools_used=self.tools_used,
         )
 
+    def _get_entry_interval_traffic(self, args: dict[str, Any]) -> dict[str, Any]:
+        client = self._require_store_analytics_client()
+        store_id = self._resolve_store_id(args)
+        start_time, end_time = self._resolve_time_window(args)
+        self.last_start_time = start_time
+        self.last_end_time = end_time
+        return client.get_entry_traffic_interval(
+            store_id=store_id,
+            start_time=start_time,
+            end_time=end_time,
+        )
+
+    def _get_daily_entry_traffic(self, args: dict[str, Any]) -> dict[str, Any]:
+        client = self._require_store_analytics_client()
+        store_id = self._resolve_store_id(args)
+        tz_name = str(args.get("timezone") or self.request.timezone)
+        tz = ZoneInfo(tz_name)
+        start_date, end_date = self._resolve_date_range(args, tz)
+        total_days = (end_date - start_date).days + 1
+        if total_days > MAX_DAILY_RANGE_DAYS:
+            raise ToolExecutionError(
+                f"Daily date range is limited to {MAX_DAILY_RANGE_DAYS} days per call"
+            )
+        self.last_timezone = tz_name
+        self.last_start_time = datetime.combine(start_date, time.min, tzinfo=tz).astimezone(
+            timezone.utc
+        )
+        self.last_end_time = (
+            datetime.combine(end_date, time.min, tzinfo=tz) + timedelta(days=1)
+        ).astimezone(timezone.utc)
+        return client.get_daily_entry_traffic(
+            store_id=store_id,
+            start_date=start_date,
+            end_date=end_date,
+            timezone_name=tz_name,
+        )
+
+    def _require_store_analytics_client(self) -> StoreAnalyticsClient:
+        if self.store_analytics_client is None or not self.store_analytics_client.configured:
+            raise ToolExecutionError(
+                "Entry/exit metrics are not configured for this service"
+            )
+        return self.store_analytics_client
+
+    def _question_mentions_entry_traffic(self) -> bool:
+        return question_mentions_entry_traffic(self.request.question)
+
     def _list_store_objects(self, args: dict[str, Any]) -> dict[str, Any]:
         store_id = self._resolve_store_id(args)
         objects = self._get_objects(store_id)
@@ -211,6 +340,10 @@ class AnalyticsToolkit:
         }
 
     def _get_interval_counts(self, args: dict[str, Any]) -> dict[str, Any]:
+        if self._question_mentions_entry_traffic():
+            raise ToolExecutionError(
+                "This question is about entry/exit traffic. Use the entry traffic tools instead of object interaction counts."
+            )
         store_id = self._resolve_store_id(args)
         object_id = self._resolve_object_id(args, store_id)
         start_time, end_time = self._resolve_time_window(args)
@@ -282,6 +415,10 @@ class AnalyticsToolkit:
         }
 
     def _get_daily_counts(self, args: dict[str, Any]) -> dict[str, Any]:
+        if self._question_mentions_entry_traffic():
+            raise ToolExecutionError(
+                "This question is about entry/exit traffic. Use the entry traffic tools instead of object interaction counts."
+            )
         store_id = self._resolve_store_id(args)
         object_id = self._resolve_object_id(args, store_id)
         tz_name = str(args.get("timezone") or self.request.timezone)
@@ -522,6 +659,8 @@ class AnalyticsToolkit:
             return "provide_or_infer_time_window"
         if "start_date is required" in lowered or "end_date is required" in lowered:
             return "provide_or_infer_date_range"
+        if "question is about entry/exit traffic" in lowered:
+            return "use_entry_traffic_tools"
         return None
 
     @staticmethod

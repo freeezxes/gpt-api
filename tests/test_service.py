@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+from datetime import date, datetime, time, timedelta, timezone
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 from app.analytics_toolkit import AnalyticsToolkit
 from app.config import Settings
@@ -21,6 +23,11 @@ DAILY_COUNTS = {
         3: (5, 2),
         8: (8, 1),
     },
+}
+
+ENTRY_DAILY = {
+    "2026-03-13": (55, 49),
+    "2026-03-14": (102, 91),
 }
 
 
@@ -63,6 +70,85 @@ class FakeTrackerClient:
                 points_around=values.get(8, (0, 0))[1],
             ),
         ]
+
+
+class FakeStoreAnalyticsClient:
+    configured = True
+
+    def get_entry_traffic_interval(self, store_id: int, start_time: datetime, end_time: datetime):
+        return {
+            "scope": "store_entry_traffic",
+            "store_id": store_id,
+            "time_window": {
+                "start_time": start_time.isoformat(),
+                "end_time": end_time.isoformat(),
+            },
+            "metric_note": "Counts come from entry/exit door-counter events, not object interaction points.",
+            "traffic": {
+                "entries_in": 157,
+                "exits_out": 140,
+                "net_flow": 17,
+            },
+            "by_door_counter": [
+                {
+                    "door_counter_id": 4,
+                    "door_counter_name": "Вход/Выход",
+                    "entries_in": 157,
+                    "exits_out": 140,
+                    "net_flow": 17,
+                }
+            ],
+        }
+
+    def get_daily_entry_traffic(
+        self,
+        store_id: int,
+        start_date: date,
+        end_date: date,
+        timezone_name: str,
+    ):
+        tz = ZoneInfo(timezone_name)
+        days = []
+        current_date = start_date
+        while current_date <= end_date:
+            entries_in, exits_out = ENTRY_DAILY.get(current_date.isoformat(), (0, 0))
+            local_start = datetime.combine(current_date, time.min, tzinfo=tz)
+            local_end = local_start + timedelta(days=1)
+            days.append(
+                {
+                    "date": current_date.isoformat(),
+                    "start_time": local_start.astimezone(timezone.utc).isoformat(),
+                    "end_time": local_end.astimezone(timezone.utc).isoformat(),
+                    "entries_in": entries_in,
+                    "exits_out": exits_out,
+                    "net_flow": entries_in - exits_out,
+                    "by_door_counter": [
+                        {
+                            "door_counter_id": 4,
+                            "door_counter_name": "Вход/Выход",
+                            "entries_in": entries_in,
+                            "exits_out": exits_out,
+                            "net_flow": entries_in - exits_out,
+                        }
+                    ],
+                }
+            )
+            current_date += timedelta(days=1)
+        return {
+            "scope": "store_entry_traffic",
+            "store_id": store_id,
+            "timezone": timezone_name,
+            "date_window": {
+                "start_date": start_date.isoformat(),
+                "end_date": end_date.isoformat(),
+            },
+            "metric_note": "Counts come from entry/exit door-counter events, not object interaction points.",
+            "best_days": {
+                "by_entries_in": max(days, key=lambda item: (item["entries_in"], item["date"])),
+                "by_exits_out": max(days, key=lambda item: (item["exits_out"], item["date"])),
+            },
+            "days": days,
+        }
 
 
 class FakeResponsesAPI:
@@ -145,6 +231,46 @@ class RetryingOpenAIClient:
         self.responses = RetryingResponsesAPI()
 
 
+class EntryResponsesAPI:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        if len(self.calls) == 1:
+            return SimpleNamespace(
+                id="resp_entry_step_1",
+                model=kwargs["model"],
+                output_text="",
+                output=[
+                    SimpleNamespace(
+                        type="function_call",
+                        name="get_daily_entry_traffic",
+                        call_id="call_entry_daily_1",
+                        arguments=json.dumps(
+                            {
+                                "start_date": "2026-03-13",
+                                "end_date": "2026-03-14",
+                                "timezone": "Asia/Almaty",
+                            }
+                        ),
+                    )
+                ],
+            )
+
+        return SimpleNamespace(
+            id="resp_entry_final_1",
+            model=kwargs["model"],
+            output_text="Вчера было 102 входа против 55 позавчера. Рост: 85.5%.",
+            output=[],
+        )
+
+
+class EntryOpenAIClient:
+    def __init__(self) -> None:
+        self.responses = EntryResponsesAPI()
+
+
 class DirectResponsesAPI:
     def __init__(self, output_text: str) -> None:
         self.calls: list[dict] = []
@@ -197,6 +323,17 @@ def make_retrying_service() -> tuple[ObjectChatService, RetryingOpenAIClient]:
     return service, openai_client
 
 
+def make_entry_service() -> tuple[ObjectChatService, EntryOpenAIClient]:
+    openai_client = EntryOpenAIClient()
+    service = ObjectChatService(
+        settings=make_settings(),
+        tracker_client=FakeTrackerClient(),
+        store_analytics_client=FakeStoreAnalyticsClient(),
+        openai_client=openai_client,
+    )
+    return service, openai_client
+
+
 def test_daily_counts_aggregates_store_and_finds_peak_day():
     request = ObjectChatRequest(
         store_id=5,
@@ -231,6 +368,51 @@ def test_store_wide_question_rejects_accidental_object_scope():
     assert "error" in result
     assert "does not identify a specific object" in result["error"]["message"]
     assert result["error"]["retry_hint"] == "retry_without_object_id"
+
+
+def test_entry_question_rejects_object_counts_tool():
+    request = ObjectChatRequest(
+        store_id=5,
+        question="Сравни вчера и позавчера по входам",
+        timezone="Asia/Almaty",
+    )
+    toolkit = AnalyticsToolkit(
+        request=request,
+        tracker_client=FakeTrackerClient(),
+        store_analytics_client=FakeStoreAnalyticsClient(),
+    )
+
+    result = toolkit.execute(
+        "get_daily_counts",
+        {"start_date": "2026-03-13", "end_date": "2026-03-14"},
+    )
+
+    assert "error" in result
+    assert "entry/exit traffic" in result["error"]["message"]
+    assert result["error"]["retry_hint"] == "use_entry_traffic_tools"
+
+
+def test_daily_entry_traffic_returns_real_entry_metric_shape():
+    request = ObjectChatRequest(
+        store_id=5,
+        question="Сравни вчера и позавчера по входам",
+        timezone="Asia/Almaty",
+    )
+    toolkit = AnalyticsToolkit(
+        request=request,
+        tracker_client=FakeTrackerClient(),
+        store_analytics_client=FakeStoreAnalyticsClient(),
+    )
+
+    result = toolkit.execute(
+        "get_daily_entry_traffic",
+        {"start_date": "2026-03-13", "end_date": "2026-03-14", "timezone": "Asia/Almaty"},
+    )
+
+    assert result["best_days"]["by_entries_in"]["date"] == "2026-03-14"
+    assert result["best_days"]["by_entries_in"]["entries_in"] == 102
+    assert result["days"][0]["entries_in"] == 55
+    assert result["days"][1]["exits_out"] == 91
 
 
 def test_answer_question_runs_tool_loop_and_returns_context():
@@ -283,6 +465,24 @@ def test_service_auto_retries_without_object_id_for_store_scope():
     assert tool_output["best_days"]["by_inside"]["date"] == "2026-03-02"
 
 
+def test_entry_question_uses_entry_tool_loop():
+    service, openai_client = make_entry_service()
+    request = ObjectChatRequest(
+        store_id=5,
+        question="Сравни вчера и позавчера по входам",
+        timezone="Asia/Almaty",
+    )
+
+    response = service.answer_question(request)
+
+    assert response.answer == "Вчера было 102 входа против 55 позавчера. Рост: 85.5%."
+    assert response.context.tools_used == ["get_daily_entry_traffic"]
+    assert response.model == "gpt-5-mini"
+    second_call = openai_client.responses.calls[1]
+    tool_output = json.loads(second_call["input"][0]["output"])
+    assert tool_output["best_days"]["by_entries_in"]["entries_in"] == 102
+
+
 def test_offtopic_question_returns_guardrail_without_openai_call():
     service, openai_client = make_service()
     request = ObjectChatRequest(
@@ -319,15 +519,18 @@ def test_output_is_normalized_for_readability():
     assert len(openai_client.responses.calls) == 1
 
 
-def test_instructions_require_short_answers_and_offtopic_refusal():
+def test_instructions_require_short_answers_and_entry_metric_rules():
     request = ObjectChatRequest(
         store_id=5,
-        question="Что происходит по магазину?",
+        question="Что по входам за вчера?",
         timezone="UTC",
     )
 
     instructions = ObjectChatService._build_instructions(request)
+    user_input = ObjectChatService._build_user_input(request)
 
+    assert "get_daily_entry_traffic" in instructions
+    assert "do not answer with `points_inside`, `points_around`, or `points_combined`" in instructions
     assert "Start with one direct sentence" in instructions
     assert OFF_TOPIC_ANSWER in instructions
-    assert "Keep the answer compact and easy to scan" in instructions
+    assert '"inferred_metric_family": "entry_traffic"' in user_input

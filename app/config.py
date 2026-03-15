@@ -33,6 +33,7 @@ class Settings:
     openai_reasoning_effort: str = "low"
     openai_max_tool_rounds: int = 6
     request_timeout_seconds: float = 30.0
+    analytics_database_url: str | None = None
     cors_allowed_origins: list[str] | None = None
 
 
@@ -48,6 +49,7 @@ def get_settings() -> Settings:
         openai_reasoning_effort=os.getenv("OPENAI_REASONING_EFFORT", "low"),
         openai_max_tool_rounds=int(os.getenv("OPENAI_MAX_TOOL_ROUNDS", "6")),
         request_timeout_seconds=float(os.getenv("REQUEST_TIMEOUT_SECONDS", "30")),
+        analytics_database_url=os.getenv("ANALYTICS_DATABASE_URL"),
         cors_allowed_origins=_parse_cors_allowed_origins(
             os.getenv("CORS_ALLOWED_ORIGINS")
         ),

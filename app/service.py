@@ -9,7 +9,9 @@ from openai import OpenAI
 
 from app.analytics_toolkit import AnalyticsToolkit
 from app.config import Settings
+from app.question_scope import question_mentions_entry_traffic
 from app.schemas import ObjectChatRequest, ObjectChatResponse
+from app.store_analytics_client import StoreAnalyticsClient
 from app.tracker_client import TrackerClient
 
 OFF_TOPIC_ANSWER = (
@@ -183,6 +185,7 @@ class ObjectChatService:
         self,
         settings: Settings,
         tracker_client: TrackerClient | None = None,
+        store_analytics_client: StoreAnalyticsClient | None = None,
         openai_client: OpenAI | None = None,
     ) -> None:
         self.settings = settings
@@ -190,11 +193,19 @@ class ObjectChatService:
             base_url=settings.tracker_api_base_url,
             timeout_seconds=settings.request_timeout_seconds,
         )
+        self.store_analytics_client = store_analytics_client or StoreAnalyticsClient(
+            database_url=settings.analytics_database_url,
+            timeout_seconds=settings.request_timeout_seconds,
+        )
         self.openai_client = openai_client
 
     def answer_question(self, payload: ObjectChatRequest) -> ObjectChatResponse:
         selected_model = payload.model or self.settings.openai_model
-        toolkit = AnalyticsToolkit(request=payload, tracker_client=self.tracker_client)
+        toolkit = AnalyticsToolkit(
+            request=payload,
+            tracker_client=self.tracker_client,
+            store_analytics_client=self.store_analytics_client,
+        )
 
         guardrail_answer = self._guardrail_answer(payload)
         if guardrail_answer is not None:
@@ -299,6 +310,9 @@ class ObjectChatService:
         request_context = {
             "store_id": payload.store_id,
             "selected_object_id": payload.object_id,
+            "inferred_metric_family": (
+                "entry_traffic" if question_mentions_entry_traffic(payload.question) else "object_activity"
+            ),
             "default_time_window": {
                 "start_time": payload.start_time.isoformat() if payload.start_time else None,
                 "end_time": payload.end_time.isoformat() if payload.end_time else None,
@@ -335,8 +349,15 @@ class ObjectChatService:
             "or phrases like 'за последний месяц', 'по дням', 'в какой день'.\n"
             "Use `get_interval_counts` for one-interval questions, rankings, comparisons inside one "
             "period, or phrases like 'за этот интервал'.\n"
+            "Use `get_daily_entry_traffic` for questions specifically about store entries/exits by day, "
+            "daily entry comparisons, door traffic, or phrases like 'входы', 'выходы', 'вошло', 'зашло'.\n"
+            "Use `get_entry_interval_traffic` for interval questions specifically about entries/exits or "
+            "door traffic for one period.\n"
             "If the user is asking about the whole store and does not explicitly focus on a single "
             "object or zone, do not pass `object_id` to tools.\n"
+            "If the question is about entries/exits, always prefer the entry traffic tools and do not "
+            "answer with `points_inside`, `points_around`, or `points_combined`. Entry/exit traffic is "
+            "store-level, not object-level.\n"
             "If there is no selected object and no object name in the question, default to store-wide analytics.\n"
             "If the user names an object but you only have text, call `list_store_objects` first to "
             "find the correct id.\n"

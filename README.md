@@ -20,6 +20,7 @@
 - Python 3.11+
 - запущенный `myrza_tracker`
 - `OPENAI_API_KEY`
+- `ANALYTICS_DATABASE_URL` для store-level входов/выходов
 
 ## Быстрый старт
 
@@ -60,6 +61,7 @@ cp .env.example .env
 ```dotenv
 OPENAI_API_KEY=replace-me
 TRACKER_API_BASE_URL=http://127.0.0.1:8000/tracker-api/api
+ANALYTICS_DATABASE_URL=postgresql://admin:replace-me@127.0.0.1:5432/paraq-platform
 CORS_ALLOWED_ORIGINS=*
 ```
 
