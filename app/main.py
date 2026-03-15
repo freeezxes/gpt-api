@@ -3,9 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import Settings, get_settings
 from app.schemas import (
@@ -19,13 +19,16 @@ from app.service import ConfigurationError, ObjectChatService, ObjectNotFoundErr
 from app.tracker_client import TrackerClientError
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+SETTINGS = get_settings()
+CORS_ALLOWED_ORIGINS = SETTINGS.cors_allowed_origins or ["*"]
+ALLOW_ALL_ORIGINS = len(CORS_ALLOWED_ORIGINS) == 1 and CORS_ALLOWED_ORIGINS[0] == "*"
 
 app = FastAPI(title="Myrza Object Chat API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=CORS_ALLOWED_ORIGINS,
+    allow_credentials=not ALLOW_ALL_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )

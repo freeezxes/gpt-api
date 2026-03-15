@@ -40,12 +40,44 @@ cd "/Users/carelogs/Own projects/myrza_tracker"
 "/Users/carelogs/Own projects/gpt-api/.venv311/bin/python" -m uvicorn backend.myrza_tracker.main:app --port 8010
 ```
 
+## Серверный запуск
+
+В репозитории есть готовый systemd unit: `deploy/systemd/gpt-api.service`.
+
+Типовой деплой на Linux:
+
+```bash
+git clone https://github.com/freeezxes/gpt-api.git
+cd gpt-api
+python3.11 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env
+```
+
+Для сервера выставьте как минимум:
+
+```dotenv
+OPENAI_API_KEY=replace-me
+TRACKER_API_BASE_URL=http://127.0.0.1:8000/tracker-api/api
+CORS_ALLOWED_ORIGINS=*
+```
+
+Запуск через systemd:
+
+```bash
+sudo cp deploy/systemd/gpt-api.service /etc/systemd/system/gpt-api.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now gpt-api
+sudo systemctl status gpt-api
+```
+
+По умолчанию сервис слушает `0.0.0.0:8020`.
+
 ## Примеры запросов
 
 ```bash
-curl -X POST "http://127.0.0.1:8020/api/object-chat" \
-  -H "Content-Type: application/json" \
-  -d '{
+curl -X POST "http://127.0.0.1:8020/api/object-chat"   -H "Content-Type: application/json"   -d '{
     "store_id": 5,
     "object_id": 8,
     "question": "Что можно сказать про этот объект за интервал?",
@@ -55,9 +87,7 @@ curl -X POST "http://127.0.0.1:8020/api/object-chat" \
 ```
 
 ```bash
-curl -X POST "http://127.0.0.1:8020/api/object-chat" \
-  -H "Content-Type: application/json" \
-  -d '{
+curl -X POST "http://127.0.0.1:8020/api/object-chat"   -H "Content-Type: application/json"   -d '{
     "store_id": 5,
     "question": "В какой день за последний месяц было больше всего клиентов?",
     "timezone": "UTC"

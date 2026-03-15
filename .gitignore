@@ -4,3 +4,5 @@
 .venv/
 .venv311/
 __pycache__/
+output/
+test-results/

@@ -15,6 +15,14 @@ for env_name in (".env", ".env.local"):
         load_dotenv(env_path, override=False)
 
 
+def _parse_cors_allowed_origins(raw_value: str | None) -> list[str]:
+    if not raw_value:
+        return ["*"]
+
+    origins = [item.strip() for item in raw_value.split(",") if item.strip()]
+    return origins or ["*"]
+
+
 @dataclass(frozen=True)
 class Settings:
     app_name: str = "Myrza Object Chat API"
@@ -25,6 +33,7 @@ class Settings:
     openai_reasoning_effort: str = "low"
     openai_max_tool_rounds: int = 6
     request_timeout_seconds: float = 30.0
+    cors_allowed_origins: list[str] | None = None
 
 
 @lru_cache(maxsize=1)
@@ -39,4 +48,7 @@ def get_settings() -> Settings:
         openai_reasoning_effort=os.getenv("OPENAI_REASONING_EFFORT", "low"),
         openai_max_tool_rounds=int(os.getenv("OPENAI_MAX_TOOL_ROUNDS", "6")),
         request_timeout_seconds=float(os.getenv("REQUEST_TIMEOUT_SECONDS", "30")),
+        cors_allowed_origins=_parse_cors_allowed_origins(
+            os.getenv("CORS_ALLOWED_ORIGINS")
+        ),
     )
