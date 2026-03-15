@@ -74,6 +74,8 @@ sudo systemctl status gpt-api
 
 По умолчанию сервис слушает `0.0.0.0:8020`.
 
+Если внешний порт `8020` недоступен извне, повесьте сервис за reverse proxy. Для Apache-шаблона есть `deploy/apache/gpt-api-backend.conf`; его можно подключить на `backend.paraqlab.kz` под префиксом `/gpt-api/`.
+
 ## Примеры запросов
 
 ```bash
