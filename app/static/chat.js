@@ -145,7 +145,7 @@ async function loadStatus() {
   setStatus("muted", "Проверяю backend...", "Проверка /health/dependencies");
   try {
     const storeId = Number(elements.storeId.value || 5);
-    const response = await fetch(`/health/dependencies?store_id=${storeId}`);
+    const response = await fetch(`./health/dependencies?store_id=${storeId}`);
     const data = await response.json();
     if (!response.ok) {
       throw new Error(data.detail || "health check failed");
@@ -175,7 +175,7 @@ async function loadObjects() {
   elements.reloadObjects.textContent = "Загрузка...";
 
   try {
-    const response = await fetch(`/api/store-objects?store_id=${storeId}`);
+    const response = await fetch(`./api/store-objects?store_id=${storeId}`);
     const data = await response.json();
     if (!response.ok) {
       throw new Error(data.detail || "Не удалось загрузить зоны");
@@ -275,7 +275,7 @@ async function sendMessage() {
   elements.question.value = "";
 
   try {
-    const response = await fetch("/api/object-chat", {
+    const response = await fetch("./api/object-chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
