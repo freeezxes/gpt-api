@@ -9,7 +9,7 @@ from openai import OpenAI
 
 from app.analytics_toolkit import AnalyticsToolkit
 from app.config import Settings
-from app.question_scope import question_mentions_entry_traffic
+from app.question_scope import question_mentions_demographics, question_mentions_entry_traffic
 from app.schemas import ObjectChatRequest, ObjectChatResponse
 from app.store_analytics_client import StoreAnalyticsClient
 from app.tracker_client import TrackerClient
@@ -310,9 +310,7 @@ class ObjectChatService:
         request_context = {
             "store_id": payload.store_id,
             "selected_object_id": payload.object_id,
-            "inferred_metric_family": (
-                "entry_traffic" if question_mentions_entry_traffic(payload.question) else "object_activity"
-            ),
+            "inferred_metric_family": ObjectChatService._infer_metric_family(payload.question),
             "default_time_window": {
                 "start_time": payload.start_time.isoformat() if payload.start_time else None,
                 "end_time": payload.end_time.isoformat() if payload.end_time else None,
@@ -353,11 +351,18 @@ class ObjectChatService:
             "daily entry comparisons, door traffic, or phrases like 'входы', 'выходы', 'вошло', 'зашло'.\n"
             "Use `get_entry_interval_traffic` for interval questions specifically about entries/exits or "
             "door traffic for one period.\n"
+            "Use `get_daily_demographics` for questions about men vs women, gender split by day, "
+            "age dynamics, or phrases like 'кто больше приходит мужчины или женщины за неделю'.\n"
+            "Use `get_demographics_interval` for one-period questions about gender split, age split, "
+            "or store demographics in one interval.\n"
             "If the user is asking about the whole store and does not explicitly focus on a single "
             "object or zone, do not pass `object_id` to tools.\n"
             "If the question is about entries/exits, always prefer the entry traffic tools and do not "
             "answer with `points_inside`, `points_around`, or `points_combined`. Entry/exit traffic is "
             "store-level, not object-level.\n"
+            "If the question is about gender, demographics, men, women, or age, always prefer the "
+            "demographics tools and do not answer with `points_inside`, `points_around`, or "
+            "`points_combined`. Demographics are store-level, not object-level.\n"
             "If there is no selected object and no object name in the question, default to store-wide analytics.\n"
             "If the user names an object but you only have text, call `list_store_objects` first to "
             "find the correct id.\n"
@@ -377,6 +382,9 @@ class ObjectChatService:
             "answer using a proxy metric and say so explicitly instead of asking for confirmation by "
             "default. For broad traffic questions about the whole store, prefer `points_combined` as "
             "the default proxy when it is available from the tools.\n"
+            "Important demographic caveat: demographic tools return analytics aggregates from "
+            "`person_traffic_aggregate`. Treat them as store-level demographic counts or session proxies, "
+            "not guaranteed unique shoppers.\n"
             "If the necessary period is missing and cannot be inferred from the current request, say "
             "what is missing instead of guessing.\n"
             "Final answer rules:\n"
@@ -388,6 +396,14 @@ class ObjectChatService:
             "- If a metric caveat is needed, keep it to one short final sentence starting with 'Метрика proxy:'.\n"
             "- Keep the answer compact and easy to scan."
         )
+
+    @staticmethod
+    def _infer_metric_family(question: str) -> str:
+        if question_mentions_entry_traffic(question):
+            return "entry_traffic"
+        if question_mentions_demographics(question):
+            return "demographics"
+        return "object_activity"
 
     def _guardrail_answer(self, payload: ObjectChatRequest) -> str | None:
         if self._is_question_in_scope(payload):

@@ -27,6 +27,27 @@ ENTRY_TRAFFIC_KEYWORDS = (
     "footfall",
 )
 
+DEMOGRAPHIC_KEYWORDS = (
+    "пол",
+    "пола",
+    "по полу",
+    "муж",
+    "мужчина",
+    "мужчины",
+    "мужчин",
+    "жен",
+    "женщина",
+    "женщины",
+    "женщин",
+    "gender",
+    "male",
+    "female",
+    "демограф",
+    "возраст",
+    "age",
+    "ages",
+)
+
 
 def normalize_question(text: str) -> str:
     return re.sub(r"\s+", " ", text.lower().replace("ё", "е")).strip()
@@ -35,3 +56,8 @@ def normalize_question(text: str) -> str:
 def question_mentions_entry_traffic(question: str) -> bool:
     normalized = normalize_question(question)
     return any(keyword in normalized for keyword in ENTRY_TRAFFIC_KEYWORDS)
+
+
+def question_mentions_demographics(question: str) -> bool:
+    normalized = normalize_question(question)
+    return any(keyword in normalized for keyword in DEMOGRAPHIC_KEYWORDS)

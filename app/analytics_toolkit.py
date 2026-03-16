@@ -6,7 +6,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from app.question_scope import question_mentions_entry_traffic
+from app.question_scope import question_mentions_demographics, question_mentions_entry_traffic
 from app.schemas import ObjectChatContext, ObjectChatRequest, TrackerCounts, TrackerObject
 from app.store_analytics_client import StoreAnalyticsClient
 from app.tracker_client import TrackerClient
@@ -229,6 +229,78 @@ class AnalyticsToolkit:
                     "additionalProperties": False,
                 },
             },
+            {
+                "type": "function",
+                "name": "get_demographics_interval",
+                "description": (
+                    "Get store-level demographics for one interval from person_traffic_aggregate. "
+                    "Use this for questions about men vs women, gender split, age split, "
+                    "or store demographics for one period such as a week."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "store_id": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "description": "Store id. Omit to use the current request store_id.",
+                        },
+                        "start_time": {
+                            "type": "string",
+                            "description": (
+                                "ISO 8601 datetime with timezone. Omit only if the current request "
+                                "already includes a default interval."
+                            ),
+                        },
+                        "end_time": {
+                            "type": "string",
+                            "description": (
+                                "ISO 8601 datetime with timezone. Omit only if the current request "
+                                "already includes a default interval."
+                            ),
+                        },
+                    },
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "type": "function",
+                "name": "get_daily_demographics",
+                "description": (
+                    "Get daily store-level demographics from person_traffic_aggregate. "
+                    "Use this for questions like who dominated by gender over the last week, "
+                    "daily gender trend, or age dynamics by day."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "store_id": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "description": "Store id. Omit to use the current request store_id.",
+                        },
+                        "start_date": {
+                            "type": "string",
+                            "description": (
+                                "Inclusive local start date in YYYY-MM-DD. Omit only if the current "
+                                "request interval should be reused as the date window."
+                            ),
+                        },
+                        "end_date": {
+                            "type": "string",
+                            "description": (
+                                "Inclusive local end date in YYYY-MM-DD. Omit only if the current "
+                                "request interval should be reused as the date window."
+                            ),
+                        },
+                        "timezone": {
+                            "type": "string",
+                            "description": "IANA timezone name. Omit to use the current request timezone.",
+                        },
+                    },
+                    "additionalProperties": False,
+                },
+            },
         ]
 
     def execute(self, name: str, arguments: str | dict[str, Any] | None) -> dict[str, Any]:
@@ -240,6 +312,8 @@ class AnalyticsToolkit:
                 "get_daily_counts": self._get_daily_counts,
                 "get_entry_interval_traffic": self._get_entry_interval_traffic,
                 "get_daily_entry_traffic": self._get_daily_entry_traffic,
+                "get_demographics_interval": self._get_demographics_interval,
+                "get_daily_demographics": self._get_daily_demographics,
             }
             handler = handlers.get(name)
             if handler is None:
@@ -316,6 +390,43 @@ class AnalyticsToolkit:
             timezone_name=tz_name,
         )
 
+    def _get_demographics_interval(self, args: dict[str, Any]) -> dict[str, Any]:
+        client = self._require_store_analytics_client()
+        store_id = self._resolve_store_id(args)
+        start_time, end_time = self._resolve_time_window(args)
+        self.last_start_time = start_time
+        self.last_end_time = end_time
+        return client.get_demographics_interval(
+            store_id=store_id,
+            start_time=start_time,
+            end_time=end_time,
+        )
+
+    def _get_daily_demographics(self, args: dict[str, Any]) -> dict[str, Any]:
+        client = self._require_store_analytics_client()
+        store_id = self._resolve_store_id(args)
+        tz_name = str(args.get("timezone") or self.request.timezone)
+        tz = ZoneInfo(tz_name)
+        start_date, end_date = self._resolve_date_range(args, tz)
+        total_days = (end_date - start_date).days + 1
+        if total_days > MAX_DAILY_RANGE_DAYS:
+            raise ToolExecutionError(
+                f"Daily date range is limited to {MAX_DAILY_RANGE_DAYS} days per call"
+            )
+        self.last_timezone = tz_name
+        self.last_start_time = datetime.combine(start_date, time.min, tzinfo=tz).astimezone(
+            timezone.utc
+        )
+        self.last_end_time = (
+            datetime.combine(end_date, time.min, tzinfo=tz) + timedelta(days=1)
+        ).astimezone(timezone.utc)
+        return client.get_daily_demographics(
+            store_id=store_id,
+            start_date=start_date,
+            end_date=end_date,
+            timezone_name=tz_name,
+        )
+
     def _require_store_analytics_client(self) -> StoreAnalyticsClient:
         if self.store_analytics_client is None or not self.store_analytics_client.configured:
             raise ToolExecutionError(
@@ -325,6 +436,9 @@ class AnalyticsToolkit:
 
     def _question_mentions_entry_traffic(self) -> bool:
         return question_mentions_entry_traffic(self.request.question)
+
+    def _question_mentions_demographics(self) -> bool:
+        return question_mentions_demographics(self.request.question)
 
     def _list_store_objects(self, args: dict[str, Any]) -> dict[str, Any]:
         store_id = self._resolve_store_id(args)
@@ -343,6 +457,10 @@ class AnalyticsToolkit:
         if self._question_mentions_entry_traffic():
             raise ToolExecutionError(
                 "This question is about entry/exit traffic. Use the entry traffic tools instead of object interaction counts."
+            )
+        if self._question_mentions_demographics():
+            raise ToolExecutionError(
+                "This question is about demographics. Use the demographics tools instead of object interaction counts."
             )
         store_id = self._resolve_store_id(args)
         object_id = self._resolve_object_id(args, store_id)
@@ -418,6 +536,10 @@ class AnalyticsToolkit:
         if self._question_mentions_entry_traffic():
             raise ToolExecutionError(
                 "This question is about entry/exit traffic. Use the entry traffic tools instead of object interaction counts."
+            )
+        if self._question_mentions_demographics():
+            raise ToolExecutionError(
+                "This question is about demographics. Use the demographics tools instead of object interaction counts."
             )
         store_id = self._resolve_store_id(args)
         object_id = self._resolve_object_id(args, store_id)
@@ -661,6 +783,8 @@ class AnalyticsToolkit:
             return "provide_or_infer_date_range"
         if "question is about entry/exit traffic" in lowered:
             return "use_entry_traffic_tools"
+        if "question is about demographics" in lowered:
+            return "use_demographics_tools"
         return None
 
     @staticmethod

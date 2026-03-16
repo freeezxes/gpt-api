@@ -4,6 +4,7 @@
 
 - сам решает, какие backend-данные нужны под вопрос, и добирает их через tool calling;
 - ходит в `myrza_tracker` по HTTP за объектами, сводкой за интервал и дневной динамикой;
+- ходит в Postgres за store-level входами/выходами и демографией;
 - задает вопрос модели OpenAI через Responses API с backend-tools;
 - отдает ответ фронту одним REST-эндпоинтом.
 
@@ -20,7 +21,7 @@
 - Python 3.11+
 - запущенный `myrza_tracker`
 - `OPENAI_API_KEY`
-- `ANALYTICS_DATABASE_URL` для store-level входов/выходов
+- `ANALYTICS_DATABASE_URL` для store-level входов/выходов и демографии
 
 ## Быстрый старт
 
