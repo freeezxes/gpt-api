@@ -22,7 +22,6 @@ OFF_TOPIC_ANSWER = (
 STRONG_DOMAIN_KEYWORDS = (
     "объект",
     "зона",
-    "магазин",
     "касс",
     "очеред",
     "трафик",
@@ -72,43 +71,7 @@ STRONG_DOMAIN_KEYWORDS = (
     "сервис",
     "персонал",
 )
-WEAK_DOMAIN_KEYWORDS = ("store", "shop", "бутик", "точка", "филиал", "локация")
-ANALYTICS_KEYWORDS = (
-    "сравни",
-    "динамик",
-    "пик",
-    "актив",
-    "лидер",
-    "топ",
-    "рост",
-    "падени",
-    "средн",
-    "максим",
-    "миним",
-    "сколько",
-    "когда",
-    "день",
-    "дня",
-    "дней",
-    "недел",
-    "месяц",
-    "месяца",
-    "час",
-    "часа",
-    "часов",
-    "сегодня",
-    "вчера",
-    "интервал",
-    "период",
-    "по дням",
-    "по часам",
-    "за последний",
-    "обзор",
-    "картин",
-    "сводн",
-    "интересн",
-    "вниман",
-)
+WEAK_DOMAIN_KEYWORDS = ("магазин", "store", "shop", "бутик", "точка", "филиал", "локация")
 OFF_TOPIC_KEYWORDS = (
     "рецепт",
     "пельмен",
@@ -167,40 +130,6 @@ SELECTED_OBJECT_REFERENCE_PHRASES = (
     "у нее",
     "здесь",
     "тут",
-)
-FOLLOW_UP_HINTS = (
-    "подробнее",
-    "короче",
-    "сравни",
-    "почему",
-    "а если",
-    "а по",
-    "топ",
-    "по дням",
-    "по часам",
-    "по зоне",
-    "по объекту",
-    "по кассе",
-    "по нему",
-    "по ней",
-)
-STORE_WIDE_HINTS = (
-    "что по",
-    "что скажешь",
-    "что можешь сказать",
-    "что видно",
-    "что происходит",
-    "что сейчас",
-    "расскажи",
-    "покажи",
-    "обзор",
-    "общую картину",
-    "общая картина",
-    "что интересного",
-    "на что обратить внимание",
-    "сводк",
-    "итог",
-    "обстановк",
 )
 OBJECT_NAME_STOPWORDS = {"object", "left", "right", "center", "setup"}
 
@@ -374,6 +303,11 @@ class ObjectChatService:
         return (
             "You are an analytics agent for Myrza Tracker.\n"
             "Your job is to decide which backend tools are needed, call them, and then answer.\n"
+            "Treat any question that is even loosely related to the store, retail operations, "
+            "sales, traffic, conversion, assortment, service, staffing, merchandising, queues, "
+            "zones, objects, customer behavior, or performance as in-scope.\n"
+            "Only refuse clearly unrelated topics like recipes, weather, coding help, politics, "
+            "or general chit-chat.\n"
             "Never invent analytics when a tool can verify them.\n"
             "Use the minimum number of tools needed for a reliable answer.\n"
             "Use `get_daily_counts` for questions about daily dynamics, trends, maxima by day, "
@@ -453,7 +387,6 @@ class ObjectChatService:
 
         strong_hits = self._keyword_hits(question, STRONG_DOMAIN_KEYWORDS)
         weak_hits = self._keyword_hits(question, WEAK_DOMAIN_KEYWORDS)
-        analytics_hits = self._keyword_hits(question, ANALYTICS_KEYWORDS)
         off_topic_hits = self._keyword_hits(question, OFF_TOPIC_KEYWORDS)
 
         if payload.object_id is not None and any(
@@ -461,34 +394,16 @@ class ObjectChatService:
         ):
             strong_hits += 1
 
-        if payload.previous_response_id and off_topic_hits == 0 and (
-            analytics_hits > 0 or any(hint in question for hint in FOLLOW_UP_HINTS)
-        ):
+        if off_topic_hits == 0:
             return True
-
-        if off_topic_hits > 0 and strong_hits == 0 and weak_hits == 0:
-            return False
 
         if strong_hits == 0:
             strong_hits += self._object_name_signal(payload.store_id, question)
 
         if strong_hits > 0:
-            return strong_hits + analytics_hits > off_topic_hits
+            return strong_hits > off_topic_hits
 
-        if weak_hits > 0 and off_topic_hits == 0:
-            return True
-
-        if analytics_hits >= 2 and off_topic_hits == 0:
-            return True
-
-        return (
-            weak_hits > 0
-            and off_topic_hits == 0
-            and (
-                analytics_hits > 0
-                or any(hint in question for hint in STORE_WIDE_HINTS)
-            )
-        )
+        return weak_hits > off_topic_hits
 
     def _object_name_signal(self, store_id: int, normalized_question: str) -> int:
         try:
