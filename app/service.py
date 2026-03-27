@@ -22,6 +22,7 @@ OFF_TOPIC_ANSWER = (
 STRONG_DOMAIN_KEYWORDS = (
     "объект",
     "зона",
+    "магазин",
     "касс",
     "очеред",
     "трафик",
@@ -53,8 +54,25 @@ STRONG_DOMAIN_KEYWORDS = (
     "heatmap",
     "уведомлен",
     "alert",
+    "ритейл",
+    "операцион",
+    "эффектив",
+    "улучш",
+    "оптим",
+    "слаб",
+    "риск",
+    "проблем",
+    "товар",
+    "sku",
+    "ассортимент",
+    "витрин",
+    "выкладк",
+    "мерч",
+    "обслужив",
+    "сервис",
+    "персонал",
 )
-WEAK_DOMAIN_KEYWORDS = ("магазин", "store", "shop")
+WEAK_DOMAIN_KEYWORDS = ("store", "shop", "бутик", "точка", "филиал", "локация")
 ANALYTICS_KEYWORDS = (
     "сравни",
     "динамик",
@@ -85,6 +103,11 @@ ANALYTICS_KEYWORDS = (
     "по дням",
     "по часам",
     "за последний",
+    "обзор",
+    "картин",
+    "сводн",
+    "интересн",
+    "вниман",
 )
 OFF_TOPIC_KEYWORDS = (
     "рецепт",
@@ -163,8 +186,18 @@ FOLLOW_UP_HINTS = (
 )
 STORE_WIDE_HINTS = (
     "что по",
+    "что скажешь",
+    "что можешь сказать",
+    "что видно",
     "что происходит",
     "что сейчас",
+    "расскажи",
+    "покажи",
+    "обзор",
+    "общую картину",
+    "общая картина",
+    "что интересного",
+    "на что обратить внимание",
     "сводк",
     "итог",
     "обстановк",
@@ -370,6 +403,9 @@ class ObjectChatService:
             "instead of asking the user, unless the missing information truly cannot be inferred.\n"
             "If the question is outside store analytics, retail operations, objects, zones, queues, "
             f"or metrics, do not call tools and answer exactly: {OFF_TOPIC_ANSWER}\n"
+            "If the question is related to the store or retail operations but the exact metric is not "
+            "available in tools, still answer usefully in Russian. Be explicit about what is known, "
+            "what is not directly available, and what available data would be the closest proxy.\n"
             f"{selected_object_line}\n"
             f"{default_window_line}\n"
             f"Default timezone: {payload.timezone}. Current UTC time: {now_utc}.\n"
@@ -430,7 +466,7 @@ class ObjectChatService:
         ):
             return True
 
-        if off_topic_hits > 0 and strong_hits == 0:
+        if off_topic_hits > 0 and strong_hits == 0 and weak_hits == 0:
             return False
 
         if strong_hits == 0:
@@ -438,6 +474,9 @@ class ObjectChatService:
 
         if strong_hits > 0:
             return strong_hits + analytics_hits > off_topic_hits
+
+        if weak_hits > 0 and off_topic_hits == 0:
+            return True
 
         if analytics_hits >= 2 and off_topic_hits == 0:
             return True

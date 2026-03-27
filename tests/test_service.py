@@ -788,6 +788,61 @@ def test_offtopic_question_returns_guardrail_without_openai_call():
     assert openai_client.responses.calls == []
 
 
+def test_soft_store_wide_question_is_allowed_without_guardrail():
+    openai_client = DirectOpenAIClient("Могу показать общую картину по магазину за период.")
+    service = ObjectChatService(
+        settings=make_settings(),
+        tracker_client=FakeTrackerClient(),
+        openai_client=openai_client,
+    )
+    request = ObjectChatRequest(
+        store_id=5,
+        question="Что скажешь по магазину?",
+        timezone="UTC",
+    )
+
+    response = service.answer_question(request)
+
+    assert response.answer == "Могу показать общую картину по магазину за период."
+    assert response.model == "gpt-5-mini"
+    assert len(openai_client.responses.calls) == 1
+
+
+def test_related_store_question_without_explicit_metric_is_allowed():
+    openai_client = DirectOpenAIClient("Могу подсказать, что стоит проверить по магазину.")
+    service = ObjectChatService(
+        settings=make_settings(),
+        tracker_client=FakeTrackerClient(),
+        openai_client=openai_client,
+    )
+    request = ObjectChatRequest(
+        store_id=5,
+        question="Что можно улучшить в магазине?",
+        timezone="UTC",
+    )
+
+    response = service.answer_question(request)
+
+    assert response.answer == "Могу подсказать, что стоит проверить по магазину."
+    assert response.model == "gpt-5-mini"
+    assert len(openai_client.responses.calls) == 1
+
+
+def test_offtopic_question_with_store_word_stays_blocked():
+    service, openai_client = make_service()
+    request = ObjectChatRequest(
+        store_id=5,
+        question="Какая погода в магазине?",
+        timezone="UTC",
+    )
+
+    response = service.answer_question(request)
+
+    assert response.answer == OFF_TOPIC_ANSWER
+    assert response.model == "guardrail"
+    assert openai_client.responses.calls == []
+
+
 def test_output_is_normalized_for_readability():
     openai_client = DirectOpenAIClient("Пик был 14 марта.  \n\n\nМетрика proxy: points_* считаем как proxy.   ")
     service = ObjectChatService(
